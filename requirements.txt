@@ -1,0 +1,11 @@
+numpy==1.26.4
+opencv-python==4.8.1.78
+onnxruntime==1.16.3
+onnx==1.20.0
+albucore==0.0.16
+albumentations==1.4.15
+scikit-image==0.25.2
+easydict
+requests
+matplotlib==3.8.4
+https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp311-cp311-win_amd64.whl
