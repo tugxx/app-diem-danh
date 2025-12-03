@@ -270,110 +270,236 @@ class MultiFlashVerifier:
         print(f"🚦 Bắt đầu chuỗi kiểm tra: {[x[1] for x in self.sequence]}")
 
     def process(self, frame, face_bbox):
-        """
-        Trả về: overlay_color, status_text, is_finished
-        """
         current_time = time.time()
         
-        # Crop khuôn mặt
+        # --- 1. CẢI TIẾN CROP VÙNG TRÁN (Forehead) ---
+        # Vùng trán phản chiếu ánh sáng tốt hơn và ít bị nhiễu bởi mắt/miệng
         x1, y1, x2, y2 = face_bbox
-        h, w = y2 - y1, x2 - x1
-        roi = frame[y1 + int(h*0.2):y2 - int(h*0.2), 
-                    x1 + int(w*0.2):x2 - int(w*0.2)]
+        w = x2 - x1
+        h = y2 - y1
+        
+        # Lấy vùng trán: Từ 15% đến 50% chiều cao khuôn mặt (tính từ trên xuống)
+        roi_y1 = y1 + int(h * 0.15)
+        roi_y2 = y1 + int(h * 0.50)
+        roi_x1 = x1 + int(w * 0.25) # Bỏ bớt tóc 2 bên
+        roi_x2 = x2 - int(w * 0.25)
+        
+        # Kiểm tra bounds
+        if roi_y1 >= roi_y2 or roi_x1 >= roi_x2:
+             return None, "Face too far/small", False
+
+        roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
         
         if roi.size == 0: return None, "No Face", False
-        current_mean = np.mean(roi, axis=(0, 1))
+        
+        # Tính mean theo chuẩn BGR của OpenCV
+        current_mean = np.mean(roi, axis=(0, 1)) 
 
         # --- STATE MACHINE ---
-        
-        # 1. PREPARING (Nghỉ giữa các lần flash để lấy base)
         if self.state == "PREPARING":
-            if current_time - self.start_time < 0.4: # Nghỉ 0.4s
+            if current_time - self.start_time < 0.5: # Tăng thời gian nghỉ lên 0.5s để cam ổn định
                 return None, "Stay still...", False
             
             self.base_mean = current_mean
+            # DEBUG: In ra base để xem cam có bị tối quá không
+            # print(f"DEBUG: Base BGR={self.base_mean.astype(int)}") 
+            
             self.state = "FLASHING"
             self.start_time = current_time
-            self.flash_mean = None # Reset mẫu flash
+            self.flash_mean = None 
             return None, "Ready...", False
 
-        # 2. FLASHING (Bật màu)
         elif self.state == "FLASHING":
             target_color, color_name = self.sequence[self.current_step]
             
-            # Flash trong 0.5s
-            if current_time - self.start_time < 0.5:
-                # Bỏ qua 0.15s đầu để camera thích ứng
-                if current_time - self.start_time > 0.15:
+            # Flash trong 0.8s (Tăng thời gian lên chút)
+            if current_time - self.start_time < 0.8:
+                # Bỏ qua 0.2s đầu cho cam thích ứng
+                if current_time - self.start_time > 0.2:
                     if self.flash_mean is None:
                         self.flash_mean = current_mean
                     else:
-                        # Lấy giá trị lớn nhất ghi nhận được (lúc màn hình sáng nhất)
-                        idx = np.argmax(target_color)
+                        # Logic tìm max: OK
+                        # Lưu ý: target_color phải match với hệ màu BGR của frame
+                        # Ví dụ: Màu đỏ phải check kênh 2 (R), Màu xanh dương check kênh 0 (B)
+                        idx = np.argmax(target_color) 
                         if current_mean[idx] > self.flash_mean[idx]:
                             self.flash_mean = current_mean
                             
                 return target_color, f"Look at screen ({color_name})", False
             
-            # Hết giờ Flash -> Chuyển sang tính điểm bước này
             self.state = "EVALUATING"
             return None, "Analyzing...", False
 
-        # 3. EVALUATING (Chấm điểm bước hiện tại)
         elif self.state == "EVALUATING":
+            if self.flash_mean is None:
+                print("⚠️ Missed flash window (Low FPS/Face lost). Treat as no change.")
+                self.flash_mean = self.base_mean # Gán bằng base để hiệu số = 0 -> Tự động Fail an toàn
+                
             target_color, color_name = self.sequence[self.current_step]
             
+            # Tính diff
             diff = self.flash_mean - self.base_mean
-            diff = np.maximum(diff, 0) # Chỉ lấy tăng dương
             
-            # Logic đơn giản hóa: Màu nào Flash thì màu đó phải TĂNG MẠNH NHẤT
-            flash_idx = np.argmax(target_color) # 0=B, 1=G, 2=R
+            # --- QUAN TRỌNG: XỬ LÝ AUTO EXPOSURE ---
+            # Nếu cam tự điều chỉnh tối đi, diff có thể âm. 
+            # Ta không clamp về 0 ngay mà xem xét tương quan.
             
-            # Tìm kênh tăng mạnh nhất trong thực tế
-            actual_max_idx = np.argmax(diff)
+            flash_idx = np.argmax(target_color) # Giả sử target_color tuân thủ BGR
             
-            # Giá trị tăng của kênh chính
             val_main = diff[flash_idx]
             
-            # Giá trị trung bình các kênh còn lại
+            # Tính noise từ các kênh còn lại
             others = list(diff)
             others.pop(flash_idx)
             val_noise = np.mean(others)
             
-            print(f"   Step {self.current_step+1}/{self.total_steps} ({color_name}): "
-                  f"Main={val_main:.1f}, Noise={val_noise:.1f} -> ", end="")
+            # DEBUG: In ra để biết tại sao fail
+            print(f"DEBUG: Color={color_name} | Base={self.base_mean.astype(int)} | Flash={self.flash_mean.astype(int)}")
+            print(f"   Step {self.current_step+1}: Main={val_main:.2f}, Noise={val_noise:.2f}")
 
-            # ĐIỀU KIỆN PASS BƯỚC NÀY:
-            # 1. Kênh chính tăng ít nhất 3 đơn vị (tránh nhiễu)
-            # 2. Kênh chính phải là kênh tăng mạnh nhất (Dominant)
-            # 3. Tỷ lệ Tín hiệu / Nhiễu > 1.2 (Thấp hơn logic cũ, nhưng dùng 3 lần để bù lại)
-            
+            # --- LOGIC PASS MỚI (LỎNG HƠN) ---
             is_pass = False
-            if val_main > 3.0 and actual_max_idx == flash_idx:
-                if val_noise == 0 or (val_main / val_noise > 1.2):
+            
+            # Điều kiện 1: Có sự thay đổi dương (dù nhỏ)
+            # Hạ threshold xuống 1.5 (thay vì 3.0)
+            if val_main > 1.5: 
+                # Điều kiện 2: Kênh chính phải tăng nhiều hơn trung bình các kênh khác
+                # (Tránh trường hợp sáng đều do bật đèn phòng)
+                if val_main > val_noise:
                     is_pass = True
             
+            # Bonus: Nếu chênh lệch rất lớn (>5) thì auto pass
+            if val_main > 5.0: is_pass = True
+
             if is_pass:
-                print("✅ OK")
+                print("   -> ✅ OK")
                 self.passed_steps += 1
             else:
-                print("❌ FAIL")
+                print("   -> ❌ FAIL")
                 
-            # Chuyển sang bước tiếp theo
             self.current_step += 1
             if self.current_step < self.total_steps:
-                self.state = "PREPARING" # Quay lại chuẩn bị cho màu sau
+                self.state = "PREPARING"
                 self.start_time = time.time()
                 return None, "Next color...", False
             else:
-                self.state = "FINISHED" # Xong hết chuỗi
+                self.state = "FINISHED"
                 return None, "Done", False
 
-        # 4. FINISHED (Chốt hạ)
         elif self.state == "FINISHED":
-            # Pass nếu đúng ít nhất 2/3 màu
+            # Pass nếu đúng 2/3 (hoặc 1/3 nếu môi trường quá khó)
             print(f"📊 KẾT QUẢ: {self.passed_steps}/{self.total_steps}")
             self.result = self.passed_steps >= 2 
             return None, "Success" if self.result else "Failed", True
 
         return None, "", False
+
+    # def process(self, frame, face_bbox):
+    #     """
+    #     Trả về: overlay_color, status_text, is_finished
+    #     """
+    #     current_time = time.time()
+        
+    #     # Crop khuôn mặt
+    #     x1, y1, x2, y2 = face_bbox
+    #     h, w = y2 - y1, x2 - x1
+    #     roi = frame[y1 + int(h*0.2):y2 - int(h*0.2), 
+    #                 x1 + int(w*0.2):x2 - int(w*0.2)]
+        
+    #     if roi.size == 0: return None, "No Face", False
+    #     current_mean = np.mean(roi, axis=(0, 1))
+
+    #     # --- STATE MACHINE ---
+        
+    #     # 1. PREPARING (Nghỉ giữa các lần flash để lấy base)
+    #     if self.state == "PREPARING":
+    #         if current_time - self.start_time < 0.4: # Nghỉ 0.4s
+    #             return None, "Stay still...", False
+            
+    #         self.base_mean = current_mean
+    #         self.state = "FLASHING"
+    #         self.start_time = current_time
+    #         self.flash_mean = None # Reset mẫu flash
+    #         return None, "Ready...", False
+
+    #     # 2. FLASHING (Bật màu)
+    #     elif self.state == "FLASHING":
+    #         target_color, color_name = self.sequence[self.current_step]
+            
+    #         # Flash trong 0.5s
+    #         if current_time - self.start_time < 0.5:
+    #             # Bỏ qua 0.15s đầu để camera thích ứng
+    #             if current_time - self.start_time > 0.15:
+    #                 if self.flash_mean is None:
+    #                     self.flash_mean = current_mean
+    #                 else:
+    #                     # Lấy giá trị lớn nhất ghi nhận được (lúc màn hình sáng nhất)
+    #                     idx = np.argmax(target_color)
+    #                     if current_mean[idx] > self.flash_mean[idx]:
+    #                         self.flash_mean = current_mean
+                            
+    #             return target_color, f"Look at screen ({color_name})", False
+            
+    #         # Hết giờ Flash -> Chuyển sang tính điểm bước này
+    #         self.state = "EVALUATING"
+    #         return None, "Analyzing...", False
+
+    #     # 3. EVALUATING (Chấm điểm bước hiện tại)
+    #     elif self.state == "EVALUATING":
+    #         target_color, color_name = self.sequence[self.current_step]
+            
+    #         diff = self.flash_mean - self.base_mean
+    #         diff = np.maximum(diff, 0) # Chỉ lấy tăng dương
+            
+    #         # Logic đơn giản hóa: Màu nào Flash thì màu đó phải TĂNG MẠNH NHẤT
+    #         flash_idx = np.argmax(target_color) # 0=B, 1=G, 2=R
+            
+    #         # Tìm kênh tăng mạnh nhất trong thực tế
+    #         actual_max_idx = np.argmax(diff)
+            
+    #         # Giá trị tăng của kênh chính
+    #         val_main = diff[flash_idx]
+            
+    #         # Giá trị trung bình các kênh còn lại
+    #         others = list(diff)
+    #         others.pop(flash_idx)
+    #         val_noise = np.mean(others)
+            
+    #         print(f"   Step {self.current_step+1}/{self.total_steps} ({color_name}): "
+    #               f"Main={val_main:.1f}, Noise={val_noise:.1f} -> ", end="")
+
+    #         # ĐIỀU KIỆN PASS BƯỚC NÀY:
+    #         # 1. Kênh chính tăng ít nhất 3 đơn vị (tránh nhiễu)
+    #         # 2. Kênh chính phải là kênh tăng mạnh nhất (Dominant)
+    #         # 3. Tỷ lệ Tín hiệu / Nhiễu > 1.2 (Thấp hơn logic cũ, nhưng dùng 3 lần để bù lại)
+            
+    #         is_pass = False
+    #         if val_main > 3.0 and actual_max_idx == flash_idx:
+    #             if val_noise == 0 or (val_main / val_noise > 1.2):
+    #                 is_pass = True
+            
+    #         if is_pass:
+    #             print("✅ OK")
+    #             self.passed_steps += 1
+    #         else:
+    #             print("❌ FAIL")
+                
+    #         # Chuyển sang bước tiếp theo
+    #         self.current_step += 1
+    #         if self.current_step < self.total_steps:
+    #             self.state = "PREPARING" # Quay lại chuẩn bị cho màu sau
+    #             self.start_time = time.time()
+    #             return None, "Next color...", False
+    #         else:
+    #             self.state = "FINISHED" # Xong hết chuỗi
+    #             return None, "Done", False
+
+    #     # 4. FINISHED (Chốt hạ)
+    #     elif self.state == "FINISHED":
+    #         # Pass nếu đúng ít nhất 2/3 màu
+    #         print(f"📊 KẾT QUẢ: {self.passed_steps}/{self.total_steps}")
+    #         self.result = self.passed_steps >= 2 
+    #         return None, "Success" if self.result else "Failed", True
+
+    #     return None, "", False

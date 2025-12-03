@@ -5,7 +5,7 @@ class FaceEngine:
     def __init__(self):
         print("⏳ Đang khởi tạo AI Engine (InsightFace)...")
         # Sử dụng model buffalo_l chuẩn
-        self.app = FaceAnalysis(name='buffalo_s', providers=['CPUExecutionProvider'])
+        self.app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
         self.app.prepare(ctx_id=0, det_size=(640, 640)) # Có thể xuống 320
         print("✅ AI Engine đã sẵn sàng!")
 
