@@ -1,10 +1,15 @@
 import cv2
 import time
 import numpy as np
+import warnings
 
 from services.verifier import MultiFlashVerifier, check_image_quality
+from services.anti_spoof_lite import AntiSpoofSystem
 
 
+
+# 1. Tắt Future Warning của InsightFace
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 CONFIG = {
     "FRAME_SKIP": 5,             # Chạy AI mỗi 5 frame
@@ -174,33 +179,41 @@ def run_auto_checkin(engine, repository):
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-    cap.set(cv2.CAP_PROP_EXPOSURE, -5.0)
+    cap.set(cv2.CAP_PROP_EXPOSURE, -4.0)
     print("📷 Camera settings applied.")
-    # Hoặc thử số -4 đến -6 nếu là Windows
-    # cap.set(cv2.CAP_PROP_EXPOSURE, -5)
+
+    # --- KHỞI TẠO ANTI-SPOOFING AI ---
+    # Load model 1 lần duy nhất ở đây
+    try:
+        spoof_checker = AntiSpoofSystem(model_path="weights/2.7_80x80_MiniFASNetV2.pth")
+    except Exception as e:
+        print(f"❌ Lỗi load Anti-Spoof: {e}")
+        return
     
     # State Variables (Biến trạng thái)
     frame_count = 0
     match_streak = 0       # Đếm số lần đúng liên tiếp
     current_candidate = None
+    real_counter = 0 # Đếm số lần là người thật liên tiếp
     
-    # Cache (Lưu kết quả AI để vẽ mượt)
-    cache = {"bbox": None, "name": None, "score": 0}
+    # Cache (Thêm liveness_score vào đây để vẽ UI không bị lỗi)
+    cache = {
+        "bbox": None, 
+        "name": None, 
+        "score": 0, 
+        "liveness_score": 0.0 # <--- MỚI
+    }
     
     # Logic thành công & Spam
     success_mode = {"active": False, "name": "", "start_time": 0}
     checkin_history = {}
-    
     prev_fps_time = 0
-
-    flash_checker = MultiFlashVerifier()
 
     while True:
         ret, frame = cap.read()
         if not ret: break
         
         frame = cv2.flip(frame, 1)
-        h, w = frame.shape[:2]
         display_img = frame.copy()
         curr_time = time.time()
 
@@ -218,11 +231,11 @@ def run_auto_checkin(engine, repository):
                 # Tìm mặt to nhất
                 main_face = max(faces, key=lambda x: (x.bbox[2]-x.bbox[0]) * (x.bbox[3]-x.bbox[1]))
                 
-                # Tính toán lại Bbox trên ảnh gốc
+                # Tính toán lại Bbox trên ảnh gốc (x1, y1, x2, y2)
                 bbox_orig = (main_face.bbox / CONFIG["PROCESS_SCALE"]).astype(int)
                 cache["bbox"] = bbox_orig
                 
-                # Nhận diện
+                # Nhận diện danh tính
                 emb = main_face.embedding / np.linalg.norm(main_face.embedding)
                 name, score = repository.find_closest_match(emb, threshold=CONFIG["SIMILARITY_THRESH"])
                 
@@ -242,92 +255,66 @@ def run_auto_checkin(engine, repository):
                         else:
                             current_candidate = name
                             match_streak = 1
+                            real_counter = 0 # Reset bộ đếm thật/giả khi đổi người
                 else:
                     match_streak = 0
             else:
                 cache["bbox"] = None
                 match_streak = 0
+                current_candidate = None
+                real_counter = 0
 
         # -----------------------------------------------------------
-        # LOGIC FLASH LIVENESS INTERFACE
+        # PHASE 2: KIỂM TRA LIVENESS (AI DEEP LEARNING)
         # -----------------------------------------------------------
-        overlay_color = None
+        
+        spoof_color = (255, 255, 0) # Màu vàng (đang chờ)
 
-        # Chỉ chạy Flash khi đã nhận diện ra tên (nhưng chưa log attendance)
-        # Và hệ thống Flash chưa đang chạy
-        if current_candidate and match_streak >= CONFIG["REQUIRED_CONSECUTIVE"] :
-            # === [THÊM MỚI] LỚP BẢO VỆ 1: CHECK CHẤT LƯỢNG ẢNH ===
-            is_quality_ok, reason = check_image_quality(frame, cache["bbox"])
+        if current_candidate and match_streak >= CONFIG["REQUIRED_CONSECUTIVE"] and not success_mode["active"]:
             
-            if not is_quality_ok:
-                cv2.putText(display_img, f"Anti-Spoof: {reason}", (50, 150), 
-                            CONFIG["FONT"], 0.8, (0, 0, 255), 2)
-                # Reset streak để bắt user chỉnh lại mặt
-                match_streak = 0 
-                flash_checker.reset()
-            
-            # Nếu ảnh nét căng, mới cho phép chạy Flash
-            elif flash_checker.state == "IDLE":
-                 flash_checker.start_challenge()
-                 match_streak = 0
-
-        # Nếu Flash đang chạy
-        if flash_checker.state != "IDLE" and cache["bbox"] is not None:
-            overlay_color, status_text, is_finished = flash_checker.process(frame, cache["bbox"])
-            
-            # Vẽ thông báo trạng thái
-            cv2.putText(display_img, f"LIVENESS: {status_text}", (50, 100), 
-                        CONFIG["FONT"], 1.0, (0, 255, 255), 2)
-
-            # Nếu Flash xong -> Kiểm tra kết quả
-            if is_finished:
-                if flash_checker.result: # NGƯỜI THẬT
-                    print("✅ Liveness Passed! Real Face Verified.")
-                    
-                    user_name = current_candidate if current_candidate else cache["name"]
-                    
-                    # Ghi Database
-                    repository.log_attendance(user_name, cache["score"])
-                    
-                    # Kích hoạt màn hình xanh (Success Mode)
-                    success_mode.update({"active": True, "name": user_name, "start_time": time.time()})
-                    checkin_history[user_name] = time.time()
-                else:
-                    # === ❌ GIẢ MẠO: TỪ CHỐI ===
-                    print("⚠️ SPOOF DETECTED! Access Denied.")
+            try:
+                # --- GỌI AI ANTI-SPOOF ---
+                # Hàm này trả về ngay lập tức: Score thật, True/False
+                real_score, is_real = spoof_checker.predict(frame, cache["bbox"])
                 
-                flash_checker.reset() # Reset để người sau vào
-                current_candidate = None # Reset người dùng
-                match_streak = 0
+                # Lưu vào cache để vẽ UI
+                cache["liveness_score"] = real_score
 
-        # -----------------------------------------------------------
-        # VẼ MÀU FLASH LÊN MÀN HÌNH (QUAN TRỌNG)
-        # -----------------------------------------------------------
-        if overlay_color is not None:
-            # Tạo một ảnh màu phủ kín màn hình
-            overlay = np.full(display_img.shape, overlay_color, dtype=np.uint8)
-            # Trộn với camera (độ trong suốt 0.7 để vẫn thấy mặt mờ mờ)
-            display_img = cv2.addWeighted(display_img, 0.3, overlay, 0.7, 0)
+                if is_real:
+                    real_counter += 1
+                    spoof_color = (0, 255, 0)
+                    print(f"⌛ Verifying... {real_counter}/3 (Score: {real_score:.2f})")
 
-        # # -----------------------------------------------------------
-        # # PHASE 2: KIỂM TRA ĐIỀU KIỆN CHỐT ĐƠN (TRIGGER SUCCESS)
-        # # -----------------------------------------------------------
-        # if match_streak >= CONFIG["REQUIRED_CONSECUTIVE"] and not success_mode["active"]:
-        #     user_name = current_candidate
-            
-        #     # Ghi log vào bảng attendance_logs trong Postgres
-        #     current_score = cache["score"] 
-        #     repository.log_attendance(user_name, current_score)
+                    if real_counter >= 3:
+                        # --- ✅ NGƯỜI THẬT ---
+                        print(f"✅ PASSED: {current_candidate} (Real Score: {real_score:.2f})")
+                        
+                        # Ghi Log Attendance
+                        repository.log_attendance(current_candidate, cache["score"])
+                        
+                        # Kích hoạt màn hình xanh
+                        success_mode.update({"active": True, "name": current_candidate, "start_time": time.time()})
+                        checkin_history[current_candidate] = time.time()
+                        
+                        # Reset
+                        match_streak = 0
+                        current_candidate = None
+                        real_counter = 0
+                else:
+                    # --- ❌ GIẢ MẠO ---
+                    real_counter = 0 # Reset ngay lập tức
+                    spoof_color = (0, 0, 255) # Đỏ
+                    print(f"⚠️ SPOOF BLOCKED: {real_score:.2f}")
+                    
+                    # Reset streak để bắt user thử lại
+                    match_streak = 0
+                    
+                    # (Tùy chọn) Thêm 1 dòng ngủ ngắn để giảm tải CPU khi bị spam fake
+                    time.sleep(0.5)
 
-        #     # Action: Ghi log & Kích hoạt UI thành công
-        #     print(f"✅ [LOG] Check-in: {user_name} at {time.strftime('%H:%M:%S')}")
-        #     checkin_history[user_name] = curr_time
-            
-        #     success_mode.update({"active": True, "name": user_name, "start_time": curr_time})
-            
-        #     # Reset
-        #     match_streak = 0
-        #     current_candidate = None
+            except Exception as e:
+                # Đôi khi mặt ở sát mép ảnh quá sẽ gây lỗi Crop -> Bỏ qua frame này
+                print(f"⚠️ Liveness Check Error: {e}")
 
         # -----------------------------------------------------------
         # PHASE 3: VẼ GIAO DIỆN (UI RENDERING)
@@ -336,35 +323,41 @@ def run_auto_checkin(engine, repository):
         # Layer 1: Vẽ khung theo dõi (Tracking Box)
         if cache["bbox"] is not None and not success_mode["active"]:
             bbox = cache["bbox"]
-            color = (0, 255, 0) if match_streak > 0 else (0, 255, 255) # Xanh hoặc Vàng
-            
+            color = spoof_color if match_streak >= CONFIG["REQUIRED_CONSECUTIVE"] else (0, 255, 255)
+
             cv2.rectangle(display_img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
-            
-            # Loading Bar (Visual feedback)
-            if match_streak > 0:
-                bar_len = int((bbox[2]-bbox[0]) * (match_streak / CONFIG["REQUIRED_CONSECUTIVE"]))
-                cv2.rectangle(display_img, (bbox[0], bbox[1]-10), (bbox[0]+bar_len, bbox[1]), (0, 255, 0), -1)
-            
-            # Tên tạm thời
+
+            # Tên & Score nhận diện
             if cache["name"]:
                 label = f"{cache['name']} ({cache['score']:.2f})"
                 cv2.putText(display_img, label, (bbox[0], bbox[1]-15), CONFIG["FONT"], 0.7, color, 2)
 
+            # Score Liveness (Hiển thị góc dưới)
+            if match_streak > 1:
+                live_txt = f"Real: {cache['liveness_score']:.2f}"
+                cv2.putText(display_img, live_txt, (bbox[0], bbox[3] + 25), CONFIG["FONT"], 0.6, color, 2)
+                
         # Layer 2: Vẽ màn hình Thành công (Nếu đang active)
         if success_mode["active"]:
-            is_still_active = draw_success_overlay(display_img, success_mode["name"], success_mode["start_time"])
-            success_mode["active"] = is_still_active # Cập nhật trạng thái (Hết giờ thì False)
+            # is_still_active = draw_success_overlay(display_img, success_mode["name"], success_mode["start_time"])
+            # success_mode["active"] = is_still_active # Cập nhật trạng thái (Hết giờ thì False)
+
+            elapsed = time.time() - success_mode["start_time"]
+            if elapsed < 2.0: # Hiện trong 2 giây
+                overlay = np.full(display_img.shape, (0, 200, 0), dtype=np.uint8)
+                display_img = cv2.addWeighted(display_img, 0.8, overlay, 0.2, 0)
+                cv2.putText(display_img, f"XIN CHAO: {success_mode['name']}", (50, 200), 
+                            CONFIG["FONT"], 1.5, (255, 255, 255), 3)
+            else:
+                success_mode["active"] = False
 
         # Layer 3: FPS
-        fps = 1 / (curr_time - prev_fps_time)
+        fps = 1 / (curr_time - prev_fps_time) if (curr_time - prev_fps_time) > 0 else 0
         prev_fps_time = curr_time
         cv2.putText(display_img, f"FPS: {int(fps)}", (10, 30), CONFIG["FONT"], 0.7, (0, 255, 0), 2)
 
         cv2.imshow("Kiosk Face ID", display_img)
 
-        # -----------------------------------------------------------
-        # PHASE 4: INPUT HANDLE
-        # -----------------------------------------------------------
         frame_count += 1
         if cv2.waitKey(1) & 0xFF == ord('q'):
             print("👋 Hệ thống tắt.")

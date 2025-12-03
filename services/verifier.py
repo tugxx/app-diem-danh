@@ -3,6 +3,8 @@ import numpy as np
 import time
 import random
 
+from services.anti_spoof_lite import AntiSpoofSystem
+
 
 
 def check_image_quality(frame, face_bbox):
@@ -45,6 +47,8 @@ def check_image_quality(frame, face_bbox):
 
 class MultiFlashVerifier:
     def __init__(self):
+        print("Loading Anti-Spoof Model...")
+        self.spoof_checker = AntiSpoofSystem(model_path="weights/2.7_80x80_MiniFASNetV2.pth")
         self.reset()
 
     def reset(self):
@@ -58,161 +62,172 @@ class MultiFlashVerifier:
         self.total_steps = 3 # Test 3 màu liên tiếp
         self.result = False
 
-    def start_challenge(self):
-        self.state = "PREPARING"
-        self.start_time = time.time()
-        self.current_step = 0
-        self.passed_steps = 0
-        
-        # Tạo chuỗi 3 màu ngẫu nhiên (R, G, B)
-        # Định dạng (B, G, R)
-        pool = [
-            ((0, 0, 255), "RED"),
-            ((0, 255, 0), "GREEN"),
-            ((255, 0, 0), "BLUE")
-        ]
-        random.shuffle(pool)
-        self.sequence = pool[:self.total_steps] # Lấy chuỗi màu
-        print(f"🚦 Bắt đầu chuỗi kiểm tra: {[x[1] for x in self.sequence]}")
-
     def process(self, frame, face_bbox):
-        """
-        Sử dụng YCrCb cho Red/Blue để chống nhiễu ánh sáng.
-        Giữ RGB cho Green.
-        """
-        current_time = time.time()
+        # Gọi hàm kiểm tra (rất nhanh, chỉ tốn ~10ms trên CPU tốt)
+        score, is_real = self.spoof_checker.predict(frame, face_bbox)
         
-        # --- 1. CROP VÙNG TRÁN ---
-        x1, y1, x2, y2 = face_bbox
-        w, h = x2 - x1, y2 - y1
-        roi_y1 = y1 + int(h * 0.15)
-        roi_y2 = y1 + int(h * 0.50)
-        roi_x1 = x1 + int(w * 0.25)
-        roi_x2 = x2 - int(w * 0.25)
-        
-        if roi_y1 >= roi_y2 or roi_x1 >= roi_x2: return None, "Face error", False
-        roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
-        if roi.size == 0: return None, "No Face", False
-        
-        # --- TÍNH TOÁN GIÁ TRỊ MÀU ---
-        # 1. Hệ RGB (Dùng cho Green)
-        mean_bgr = np.mean(roi, axis=(0, 1)) # [Blue, Green, Red]
-        
-        # 2. Hệ YCrCb (Dùng cho Red/Blue) -> Quan trọng nhất!
-        roi_ycrcb = cv2.cvtColor(roi, cv2.COLOR_BGR2YCrCb)
-        mean_ycrcb = np.mean(roi_ycrcb, axis=(0, 1)) # [Y, Cr, Cb]
-        
-        # Giá trị hiện tại gói gọn
-        curr_vals = {"bgr": mean_bgr, "ycrcb": mean_ycrcb}
+        if is_real:
+            # Nếu thật -> Cho phép nhận diện mặt (InsightFace)
+            return "REAL", f"Real Face ({score:.2f})", True
+        else:
+            # Nếu giả -> Chặn luôn
+            return "FAKE", f"SPOOF DETECTED! ({score:.2f})", False
 
-        # --- STATE MACHINE ---
-        if self.state == "PREPARING":
-            if current_time - self.start_time < 0.5: return None, "Stay still...", False
+    # def start_challenge(self):
+    #     self.state = "PREPARING"
+    #     self.start_time = time.time()
+    #     self.current_step = 0
+    #     self.passed_steps = 0
+        
+    #     # Tạo chuỗi 3 màu ngẫu nhiên (R, G, B)
+    #     # Định dạng (B, G, R)
+    #     pool = [
+    #         ((0, 0, 255), "RED"),
+    #         ((0, 255, 0), "GREEN"),
+    #         ((255, 0, 0), "BLUE")
+    #     ]
+    #     random.shuffle(pool)
+    #     self.sequence = pool[:self.total_steps] # Lấy chuỗi màu
+    #     print(f"🚦 Bắt đầu chuỗi kiểm tra: {[x[1] for x in self.sequence]}")
+
+    # def process(self, frame, face_bbox):
+    #     """
+    #     Sử dụng YCrCb cho Red/Blue để chống nhiễu ánh sáng.
+    #     Giữ RGB cho Green.
+    #     """
+    #     current_time = time.time()
+        
+    #     # --- 1. CROP VÙNG TRÁN ---
+    #     x1, y1, x2, y2 = face_bbox
+    #     w, h = x2 - x1, y2 - y1
+    #     roi_y1 = y1 + int(h * 0.15)
+    #     roi_y2 = y1 + int(h * 0.50)
+    #     roi_x1 = x1 + int(w * 0.25)
+    #     roi_x2 = x2 - int(w * 0.25)
+        
+    #     if roi_y1 >= roi_y2 or roi_x1 >= roi_x2: return None, "Face error", False
+    #     roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+    #     if roi.size == 0: return None, "No Face", False
+        
+    #     # --- TÍNH TOÁN GIÁ TRỊ MÀU ---
+    #     # 1. Hệ RGB (Dùng cho Green)
+    #     mean_bgr = np.mean(roi, axis=(0, 1)) # [Blue, Green, Red]
+        
+    #     # 2. Hệ YCrCb (Dùng cho Red/Blue) -> Quan trọng nhất!
+    #     roi_ycrcb = cv2.cvtColor(roi, cv2.COLOR_BGR2YCrCb)
+    #     mean_ycrcb = np.mean(roi_ycrcb, axis=(0, 1)) # [Y, Cr, Cb]
+        
+    #     # Giá trị hiện tại gói gọn
+    #     curr_vals = {"bgr": mean_bgr, "ycrcb": mean_ycrcb}
+
+    #     # --- STATE MACHINE ---
+    #     if self.state == "PREPARING":
+    #         if current_time - self.start_time < 0.5: return None, "Stay still...", False
             
-            # Lưu cả 2 hệ màu làm base
-            self.base_bgr = mean_bgr
-            self.base_ycrcb = mean_ycrcb
+    #         # Lưu cả 2 hệ màu làm base
+    #         self.base_bgr = mean_bgr
+    #         self.base_ycrcb = mean_ycrcb
             
-            self.state = "FLASHING"
-            self.start_time = current_time
-            self.flash_vals = None 
-            return None, "Ready...", False
+    #         self.state = "FLASHING"
+    #         self.start_time = current_time
+    #         self.flash_vals = None 
+    #         return None, "Ready...", False
 
-        elif self.state == "FLASHING":
-            target_color, color_name = self.sequence[self.current_step]
-            elapsed = current_time - self.start_time
+    #     elif self.state == "FLASHING":
+    #         target_color, color_name = self.sequence[self.current_step]
+    #         elapsed = current_time - self.start_time
 
-            if elapsed < 0.8:
-                if elapsed > 0.1:
-                    # Gom dữ liệu hiện tại
-                    curr_vals = {"bgr": mean_bgr, "ycrcb": mean_ycrcb}
+    #         if elapsed < 0.8:
+    #             if elapsed > 0.1:
+    #                 # Gom dữ liệu hiện tại
+    #                 curr_vals = {"bgr": mean_bgr, "ycrcb": mean_ycrcb}
                     
-                    if self.flash_vals is None:
-                        self.flash_vals = curr_vals
-                    else:
-                        # Logic tìm Max (Peak) thông minh hơn
-                        # Nếu là màu ĐỎ -> Tìm lúc Cr cao nhất
-                        if color_name == "RED":
-                            if mean_ycrcb[1] > self.flash_vals["ycrcb"][1]: # Kênh Cr
-                                self.flash_vals = curr_vals
-                        # Nếu là màu XANH DƯƠNG -> Tìm lúc Cb cao nhất
-                        elif color_name == "BLUE":
-                            if mean_ycrcb[2] > self.flash_vals["ycrcb"][2]: # Kênh Cb
-                                self.flash_vals = curr_vals
-                        # Nếu là XANH LÁ -> Dùng kênh Green của RGB
-                        else:
-                            if mean_bgr[1] > self.flash_vals["bgr"][1]:
-                                self.flash_vals = curr_vals
+    #                 if self.flash_vals is None:
+    #                     self.flash_vals = curr_vals
+    #                 else:
+    #                     # Logic tìm Max (Peak) thông minh hơn
+    #                     # Nếu là màu ĐỎ -> Tìm lúc Cr cao nhất
+    #                     if color_name == "RED":
+    #                         if mean_ycrcb[1] > self.flash_vals["ycrcb"][1]: # Kênh Cr
+    #                             self.flash_vals = curr_vals
+    #                     # Nếu là màu XANH DƯƠNG -> Tìm lúc Cb cao nhất
+    #                     elif color_name == "BLUE":
+    #                         if mean_ycrcb[2] > self.flash_vals["ycrcb"][2]: # Kênh Cb
+    #                             self.flash_vals = curr_vals
+    #                     # Nếu là XANH LÁ -> Dùng kênh Green của RGB
+    #                     else:
+    #                         if mean_bgr[1] > self.flash_vals["bgr"][1]:
+    #                             self.flash_vals = curr_vals
                                 
-                return target_color, f"Look at screen ({color_name})", False
+    #             return target_color, f"Look at screen ({color_name})", False
             
-            # [FIX 2]: Hết giờ Flash -> Trước khi đi, kiểm tra lần cuối
-            if self.flash_vals is None:
-                # Nếu chưa bắt được gì (do FPS thấp), lấy ngay frame cuối cùng này!
-                self.flash_vals = curr_vals
+    #         # [FIX 2]: Hết giờ Flash -> Trước khi đi, kiểm tra lần cuối
+    #         if self.flash_vals is None:
+    #             # Nếu chưa bắt được gì (do FPS thấp), lấy ngay frame cuối cùng này!
+    #             self.flash_vals = curr_vals
 
-            self.state = "EVALUATING"
-            return None, "Analyzing...", False
+    #         self.state = "EVALUATING"
+    #         return None, "Analyzing...", False
 
-        elif self.state == "EVALUATING":
-            if self.flash_vals is None:
-                # Fallback an toàn
-                self.flash_vals = {"bgr": self.base_bgr, "ycrcb": self.base_ycrcb}
+    #     elif self.state == "EVALUATING":
+    #         if self.flash_vals is None:
+    #             # Fallback an toàn
+    #             self.flash_vals = {"bgr": self.base_bgr, "ycrcb": self.base_ycrcb}
 
-            _, color_name = self.sequence[self.current_step]
-            is_pass = False
-            debug_info = ""
+    #         _, color_name = self.sequence[self.current_step]
+    #         is_pass = False
+    #         debug_info = ""
 
-            # --- LOGIC ĐÁNH GIÁ CHUYÊN SÂU ---
-            # [FIX 3]: Hạ Threshold xuống 1.0 (Webcam thường chỉ đạt tầm 1.2 - 2.0)
-            THRESHOLD = 1.0
+    #         # --- LOGIC ĐÁNH GIÁ CHUYÊN SÂU ---
+    #         # [FIX 3]: Hạ Threshold xuống 1.0 (Webcam thường chỉ đạt tầm 1.2 - 2.0)
+    #         THRESHOLD = 1.0
 
-            # CASE 1: MÀU ĐỎ (Dùng Cr)
-            if color_name == "RED":
-                # Cr (Red-Difference) phải tăng lên
-                diff = self.flash_vals["ycrcb"][1] - self.base_ycrcb[1]
-                debug_info = f"Delta Cr={diff:.2f}"
-                # Ngưỡng thấp hơn RGB vì YCrCb rất nhạy
-                if diff > THRESHOLD: is_pass = True 
+    #         # CASE 1: MÀU ĐỎ (Dùng Cr)
+    #         if color_name == "RED":
+    #             # Cr (Red-Difference) phải tăng lên
+    #             diff = self.flash_vals["ycrcb"][1] - self.base_ycrcb[1]
+    #             debug_info = f"Delta Cr={diff:.2f}"
+    #             # Ngưỡng thấp hơn RGB vì YCrCb rất nhạy
+    #             if diff > THRESHOLD: is_pass = True 
 
-            # CASE 2: MÀU XANH DƯƠNG (Dùng Cb)
-            elif color_name == "BLUE":
-                # Cb (Blue-Difference) phải tăng lên
-                diff = self.flash_vals["ycrcb"][2] - self.base_ycrcb[2]
-                debug_info = f"Delta Cb={diff:.2f}"
-                if diff > THRESHOLD: is_pass = True
+    #         # CASE 2: MÀU XANH DƯƠNG (Dùng Cb)
+    #         elif color_name == "BLUE":
+    #             # Cb (Blue-Difference) phải tăng lên
+    #             diff = self.flash_vals["ycrcb"][2] - self.base_ycrcb[2]
+    #             debug_info = f"Delta Cb={diff:.2f}"
+    #             if diff > THRESHOLD: is_pass = True
 
-            # CASE 3: MÀU XANH LÁ (Dùng Green RGB - Fallback)
-            elif color_name == "GREEN":
-                # Kênh Green phải tăng mạnh hơn các kênh khác
-                diff_bgr = self.flash_vals["bgr"] - self.base_bgr
-                val_g = diff_bgr[1]
-                val_others = (diff_bgr[0] + diff_bgr[2]) / 2
-                debug_info = f"Delta G={val_g:.2f} vs Others={val_others:.2f}"
+    #         # CASE 3: MÀU XANH LÁ (Dùng Green RGB - Fallback)
+    #         elif color_name == "GREEN":
+    #             # Kênh Green phải tăng mạnh hơn các kênh khác
+    #             diff_bgr = self.flash_vals["bgr"] - self.base_bgr
+    #             val_g = diff_bgr[1]
+    #             val_others = (diff_bgr[0] + diff_bgr[2]) / 2
+    #             debug_info = f"Delta G={val_g:.2f} vs Others={val_others:.2f}"
                 
-                # Logic tương quan (như cũ)
-                if val_g > THRESHOLD and val_g > val_others: is_pass = True
-                elif val_g > (val_others + 1.0): is_pass = True
+    #             # Logic tương quan (như cũ)
+    #             if val_g > THRESHOLD and val_g > val_others: is_pass = True
+    #             elif val_g > (val_others + 1.0): is_pass = True
 
-            print(f"DEBUG [{color_name}]: {debug_info} -> {'✅ OK' if is_pass else '❌ FAIL'}")
+    #         print(f"DEBUG [{color_name}]: {debug_info} -> {'✅ OK' if is_pass else '❌ FAIL'}")
 
-            if is_pass: self.passed_steps += 1
+    #         if is_pass: self.passed_steps += 1
             
-            self.current_step += 1
-            if self.current_step < self.total_steps:
-                self.state = "PREPARING"
-                self.start_time = time.time()
-                return None, "Next...", False
-            else:
-                self.state = "FINISHED"
-                return None, "Done", False
+    #         self.current_step += 1
+    #         if self.current_step < self.total_steps:
+    #             self.state = "PREPARING"
+    #             self.start_time = time.time()
+    #             return None, "Next...", False
+    #         else:
+    #             self.state = "FINISHED"
+    #             return None, "Done", False
 
-        elif self.state == "FINISHED":
-            print(f"📊 KẾT QUẢ: {self.passed_steps}/{self.total_steps}")
-            self.result = self.passed_steps >= 2
-            return None, "Success" if self.result else "Failed", True
+    #     elif self.state == "FINISHED":
+    #         print(f"📊 KẾT QUẢ: {self.passed_steps}/{self.total_steps}")
+    #         self.result = self.passed_steps >= 2
+    #         return None, "Success" if self.result else "Failed", True
 
-        return None, "", False
+    #     return None, "", False
 
     # def process(self, frame, face_bbox):
     #     """
