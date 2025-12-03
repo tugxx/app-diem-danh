@@ -2,6 +2,8 @@ import cv2
 import time
 import numpy as np
 
+from services.verifier import MultiFlashVerifier
+
 
 
 CONFIG = {
@@ -170,6 +172,12 @@ def run_auto_checkin(engine, repository):
     print("👉 Hệ thống chạy liên tục. Nhấn 'q' để thoát.")
     
     cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+    cap.set(cv2.CAP_PROP_EXPOSURE, -5.0)
+    print("📷 Camera settings applied.")
+    # Hoặc thử số -4 đến -6 nếu là Windows
+    # cap.set(cv2.CAP_PROP_EXPOSURE, -5)
     
     # State Variables (Biến trạng thái)
     frame_count = 0
@@ -184,6 +192,8 @@ def run_auto_checkin(engine, repository):
     checkin_history = {}
     
     prev_fps_time = 0
+
+    flash_checker = MultiFlashVerifier()
 
     while True:
         ret, frame = cap.read()
@@ -239,24 +249,73 @@ def run_auto_checkin(engine, repository):
                 match_streak = 0
 
         # -----------------------------------------------------------
-        # PHASE 2: KIỂM TRA ĐIỀU KIỆN CHỐT ĐƠN (TRIGGER SUCCESS)
+        # LOGIC FLASH LIVENESS INTERFACE
         # -----------------------------------------------------------
-        if match_streak >= CONFIG["REQUIRED_CONSECUTIVE"] and not success_mode["active"]:
-            user_name = current_candidate
-            
-            # Ghi log vào bảng attendance_logs trong Postgres
-            current_score = cache["score"] 
-            repository.log_attendance(user_name, current_score)
+        overlay_color = None
 
-            # Action: Ghi log & Kích hoạt UI thành công
-            print(f"✅ [LOG] Check-in: {user_name} at {time.strftime('%H:%M:%S')}")
-            checkin_history[user_name] = curr_time
+        # Chỉ chạy Flash khi đã nhận diện ra tên (nhưng chưa log attendance)
+        # Và hệ thống Flash chưa đang chạy
+        if current_candidate and match_streak >= CONFIG["REQUIRED_CONSECUTIVE"] and flash_checker.state == "IDLE":
+            flash_checker.start_challenge()
+            match_streak = 0 # Reset streak để pause việc nhận diện lại
+
+        # Nếu Flash đang chạy
+        if flash_checker.state != "IDLE" and cache["bbox"] is not None:
+            overlay_color, status_text, is_finished = flash_checker.process(frame, cache["bbox"])
             
-            success_mode.update({"active": True, "name": user_name, "start_time": curr_time})
+            # Vẽ thông báo trạng thái
+            cv2.putText(display_img, f"LIVENESS: {status_text}", (50, 100), 
+                        CONFIG["FONT"], 1.0, (0, 255, 255), 2)
+
+            # Nếu Flash xong -> Kiểm tra kết quả
+            if is_finished:
+                if flash_checker.result: # NGƯỜI THẬT
+                    print("✅ Liveness Passed! Real Face Verified.")
+                    
+                    user_name = current_candidate if current_candidate else cache["name"]
+                    
+                    # Ghi Database
+                    repository.log_attendance(user_name, cache["score"])
+                    
+                    # Kích hoạt màn hình xanh (Success Mode)
+                    success_mode.update({"active": True, "name": user_name, "start_time": time.time()})
+                    checkin_history[user_name] = time.time()
+                else:
+                    # === ❌ GIẢ MẠO: TỪ CHỐI ===
+                    print("⚠️ SPOOF DETECTED! Access Denied.")
+                
+                flash_checker.reset() # Reset để người sau vào
+                current_candidate = None # Reset người dùng
+                match_streak = 0
+
+        # -----------------------------------------------------------
+        # VẼ MÀU FLASH LÊN MÀN HÌNH (QUAN TRỌNG)
+        # -----------------------------------------------------------
+        if overlay_color is not None:
+            # Tạo một ảnh màu phủ kín màn hình
+            overlay = np.full(display_img.shape, overlay_color, dtype=np.uint8)
+            # Trộn với camera (độ trong suốt 0.7 để vẫn thấy mặt mờ mờ)
+            display_img = cv2.addWeighted(display_img, 0.3, overlay, 0.7, 0)
+
+        # # -----------------------------------------------------------
+        # # PHASE 2: KIỂM TRA ĐIỀU KIỆN CHỐT ĐƠN (TRIGGER SUCCESS)
+        # # -----------------------------------------------------------
+        # if match_streak >= CONFIG["REQUIRED_CONSECUTIVE"] and not success_mode["active"]:
+        #     user_name = current_candidate
             
-            # Reset
-            match_streak = 0
-            current_candidate = None
+        #     # Ghi log vào bảng attendance_logs trong Postgres
+        #     current_score = cache["score"] 
+        #     repository.log_attendance(user_name, current_score)
+
+        #     # Action: Ghi log & Kích hoạt UI thành công
+        #     print(f"✅ [LOG] Check-in: {user_name} at {time.strftime('%H:%M:%S')}")
+        #     checkin_history[user_name] = curr_time
+            
+        #     success_mode.update({"active": True, "name": user_name, "start_time": curr_time})
+            
+        #     # Reset
+        #     match_streak = 0
+        #     current_candidate = None
 
         # -----------------------------------------------------------
         # PHASE 3: VẼ GIAO DIỆN (UI RENDERING)
