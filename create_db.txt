@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS public.attendance_logs
+(
+    id integer NOT NULL DEFAULT nextval('attendance_logs_id_seq'::regclass),
+    user_code character varying(50) COLLATE pg_catalog."default",
+    checkin_time timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    image_path text COLLATE pg_catalog."default",
+    score double precision,
+    CONSTRAINT attendance_logs_pkey PRIMARY KEY (id)
+)
+
+CREATE TABLE IF NOT EXISTS public.user_faces
+(
+    id integer NOT NULL DEFAULT nextval('user_faces_id_seq'::regclass),
+    user_code character varying(50) COLLATE pg_catalog."default",
+    full_name character varying(100) COLLATE pg_catalog."default",
+    embedding double precision[],
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT user_faces_pkey PRIMARY KEY (id),
+    CONSTRAINT user_faces_user_code_key UNIQUE (user_code)
+)

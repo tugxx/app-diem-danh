@@ -2,7 +2,7 @@ import cv2
 import time
 import numpy as np
 
-from services.verifier import MultiFlashVerifier
+from services.verifier import MultiFlashVerifier, check_image_quality
 
 
 
@@ -255,9 +255,21 @@ def run_auto_checkin(engine, repository):
 
         # Chỉ chạy Flash khi đã nhận diện ra tên (nhưng chưa log attendance)
         # Và hệ thống Flash chưa đang chạy
-        if current_candidate and match_streak >= CONFIG["REQUIRED_CONSECUTIVE"] and flash_checker.state == "IDLE":
-            flash_checker.start_challenge()
-            match_streak = 0 # Reset streak để pause việc nhận diện lại
+        if current_candidate and match_streak >= CONFIG["REQUIRED_CONSECUTIVE"] :
+            # === [THÊM MỚI] LỚP BẢO VỆ 1: CHECK CHẤT LƯỢNG ẢNH ===
+            is_quality_ok, reason = check_image_quality(frame, cache["bbox"])
+            
+            if not is_quality_ok:
+                cv2.putText(display_img, f"Anti-Spoof: {reason}", (50, 150), 
+                            CONFIG["FONT"], 0.8, (0, 0, 255), 2)
+                # Reset streak để bắt user chỉnh lại mặt
+                match_streak = 0 
+                flash_checker.reset()
+            
+            # Nếu ảnh nét căng, mới cho phép chạy Flash
+            elif flash_checker.state == "IDLE":
+                 flash_checker.start_challenge()
+                 match_streak = 0
 
         # Nếu Flash đang chạy
         if flash_checker.state != "IDLE" and cache["bbox"] is not None:
