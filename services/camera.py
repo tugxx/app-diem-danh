@@ -166,7 +166,7 @@ def is_spamming(history, name):
 
 
 def run_auto_checkin(engine, repository):
-    print("\n🤖 CHẾ ĐỘ KIOSK (CLEAN CODE VERSION)")
+    print("\n🤖 CHẾ ĐỘ KIOSK")
     print("👉 Hệ thống chạy liên tục. Nhấn 'q' để thoát.")
     
     cap = cv2.VideoCapture(0)
@@ -244,6 +244,10 @@ def run_auto_checkin(engine, repository):
         if match_streak >= CONFIG["REQUIRED_CONSECUTIVE"] and not success_mode["active"]:
             user_name = current_candidate
             
+            # Ghi log vào bảng attendance_logs trong Postgres
+            current_score = cache["score"] 
+            repository.log_attendance(user_name, current_score)
+
             # Action: Ghi log & Kích hoạt UI thành công
             print(f"✅ [LOG] Check-in: {user_name} at {time.strftime('%H:%M:%S')}")
             checkin_history[user_name] = curr_time

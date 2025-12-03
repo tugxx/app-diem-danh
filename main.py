@@ -2,10 +2,18 @@ from core.engine import FaceEngine
 from database.storage import FaceRepository
 from services import importer, camera
 
+DB_CONFIG = {
+    "dbname": "diem_danh",
+    "user": "postgres",
+    "password": "123456",
+    "host": "localhost",
+    "port": "5432"
+}
+
 def main():
     # 1. Khởi tạo các thành phần cốt lõi (Core & DB)
     core_engine = FaceEngine()
-    db_repo = FaceRepository()
+    db_repo = FaceRepository(DB_CONFIG)
 
     while True:
         print("\n=== HỆ THỐNG ĐIỂM DANH FACE ID ===")

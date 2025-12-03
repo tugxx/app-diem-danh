@@ -26,7 +26,7 @@ def run_import(engine, repository, dataset_dir="dataset", overwrite=False):
         print("⚠️ Chế độ GHI ĐÈ: Sẽ xử lý lại toàn bộ dữ liệu.")
     else:
         # Chỉ lấy những người CHƯA CÓ trong database
-        existing_users = repository.database.keys()
+        existing_users = repository.cache.keys()
         for user in all_users:
             if user in existing_users:
                 skipped_count += 1
