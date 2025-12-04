@@ -8,8 +8,8 @@ from services.anti_spoof_lite import AntiSpoofSystem
 
 
 
-# 1. Tắt Future Warning của InsightFace
-warnings.filterwarnings("ignore", category=FutureWarning)
+# # 1. Tắt Future Warning của InsightFace
+# warnings.filterwarnings("ignore", category=FutureWarning)
 
 CONFIG = {
     "FRAME_SKIP": 5,             # Chạy AI mỗi 5 frame
@@ -33,7 +33,7 @@ def run_camera(engine, repository):
     SIMILARITY_THRESHOLD = 0.5 # Ngưỡng nhận diện cho buffalo_s
     
     # Biến lưu trữ kết quả tạm thời (Cache) để vẽ khi AI đang nghỉ
-    # Cấu trúc: list các dict {'bbox': ..., 'name': ..., 'score': ..., 'kps': ...}
+    # Cấu trúc: list các dict {'bbox': ..., 'name': ..., 'score': ..., 'kps': ...} 
     cached_results = []
     
     frame_count = 0
@@ -196,7 +196,7 @@ def run_auto_checkin(engine, repository):
     current_candidate = None
     real_counter = 0 # Đếm số lần là người thật liên tiếp
     
-    # Cache (Thêm liveness_score vào đây để vẽ UI không bị lỗi)
+    # Cache (Thêm liveness_score vào đây để vẽ UI)
     cache = {
         "bbox": None, 
         "name": None, 
@@ -218,14 +218,14 @@ def run_auto_checkin(engine, repository):
         curr_time = time.time()
 
         # -----------------------------------------------------------
-        # PHASE 1: XỬ LÝ AI (Chỉ chạy khi không hiện Success & đúng nhịp Frame)
+        # PHASE 1: XỬ LÝ AI - InsightFace (Chỉ chạy khi không hiện Success & đúng nhịp Frame)
         # -----------------------------------------------------------
         should_run_ai = (not success_mode["active"]) and (frame_count % CONFIG["FRAME_SKIP"] == 0)
 
         if should_run_ai:
             # Resize để tăng tốc
             img_small = cv2.resize(frame, (0,0), fx=CONFIG["PROCESS_SCALE"], fy=CONFIG["PROCESS_SCALE"])
-            faces = engine.extract_faces(img_small)
+            faces = engine.extract_faces(img_small) 
             
             if len(faces) > 0:
                 # Tìm mặt to nhất
@@ -249,10 +249,10 @@ def run_auto_checkin(engine, repository):
                         cache["name"] = f"{name} (Wait...)"
                         match_streak = 0
                     else:
-                        # Logic Streak
+                        # Nếu tên người vừa nhận diện (name) GIỐNG người đang theo dõi (current_candidate)
                         if name == current_candidate:
                             match_streak += 1
-                        else:
+                        else: # Nếu đổi người khác (hoặc AI nhận nhầm ra người khác)
                             current_candidate = name
                             match_streak = 1
                             real_counter = 0 # Reset bộ đếm thật/giả khi đổi người
@@ -265,7 +265,7 @@ def run_auto_checkin(engine, repository):
                 real_counter = 0
 
         # -----------------------------------------------------------
-        # PHASE 2: KIỂM TRA LIVENESS (AI DEEP LEARNING)
+        # PHASE 2: KIỂM TRA LIVENESS (AI DEEP LEARNING - MiniFasnet)
         # -----------------------------------------------------------
         
         spoof_color = (255, 255, 0) # Màu vàng (đang chờ)

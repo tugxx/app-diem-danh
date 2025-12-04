@@ -154,7 +154,7 @@ def MiniFASNetV2(embedding_size=128, conv6_kernel=(5, 5), drop_p=0.2, num_classe
 
 
 # ==========================================
-# 2. CLASS CROP ẢNH (Quan trọng: Lấy từ test.py bạn gửi)
+# 2. CLASS CROP ẢNH 
 # ==========================================
 class CropImage:
     @staticmethod
@@ -225,7 +225,7 @@ class AntiSpoofSystem:
 
         # 1. Load file weights lên trước để kiểm tra cấu trúc
         try:
-            state_dict = torch.load(model_path, map_location=self.device)
+            state_dict = torch.load(model_path, map_location=self.device) 
             
             # Xử lý key thừa "module."
             new_state_dict = {}
@@ -233,8 +233,7 @@ class AntiSpoofSystem:
                 name = k[7:] if k.startswith('module.') else k
                 new_state_dict[name] = v
             
-            # Cố gắng load (strict=False để nó tự khớp những gì khớp được)
-            self.model.load_state_dict(new_state_dict, strict=False)
+            self.model.load_state_dict(new_state_dict, strict=True) # hoặc chuyển về strict=False để nó tự khớp những gì khớp được
             print(">> Model loaded (Mode: V1 Compatibility).")
 
         except Exception as e:
@@ -260,7 +259,7 @@ class AntiSpoofSystem:
     def predict(self, frame, face_bbox):
         """
         Input: Frame (BGR), face_bbox [x, y, w, h] (Lưu ý: bbox dạng w,h chứ không phải x2, y2)
-        Nếu bbox của bạn là [x1, y1, x2, y2] thì phải đổi lại bên dưới
+        Nếu bbox là [x1, y1, x2, y2] thì phải đổi lại bên dưới
         """
         # CHUYỂN ĐỔI BBOX
         # Giả sử đầu vào face_bbox là [x1, y1, x2, y2] (từ thư viện nhận diện mặt phổ biến)
@@ -272,7 +271,7 @@ class AntiSpoofSystem:
         # 1. CROP CHUẨN (Scale 2.7 cho file model 2.7_80x80)
         img_crop = self.cropper.crop(frame, bbox_standard, scale=2.7, out_w=80, out_h=80)
         
-        # 2. CHUYỂN MÀU BGR -> RGB (Cực kỳ quan trọng)
+        # 2. CHUYỂN MÀU BGR -> RGB 
         img_crop = cv2.cvtColor(img_crop, cv2.COLOR_BGR2RGB)
 
         # 3. CHUYỂN SANG TENSOR

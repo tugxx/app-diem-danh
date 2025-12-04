@@ -1,24 +1,25 @@
-py -3.11 -m venv venv311
+cài venv bản python 3.11
 
-venv311\Scripts\activate
+cài postgresql. Tạo database: diem_danh
+(user: postgres, pass: 123456)
 
-pip install numpy==1.26.4 
+trong database tạo 2 bảng:
+CREATE TABLE IF NOT EXISTS public.attendance_logs (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_code VARCHAR(50),
+    checkin_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    image_path TEXT,
+    score DOUBLE PRECISION
+);
 
-# 1. Cài OpenCV 
-pip install opencv-python==4.8.1.78
-
-
-# 2. Cài các dependency cần thiết trước
-pip install onnxruntime==1.16.3 # Bản cpu, muốn chạy gpu-nvidia thì pip install onnxruntime-gpu==1.16.3
-pip install tqdm pillow
-
-pip install onnx==1.20.0
-pip install scikit-image==0.25.2
-pip install albumentations==1.4.10 --no-deps
-pip install albucore==0.0.17 --no-deps
-pip install easydict 
-pip install requests
-
-pip install --force-reinstall --no-deps https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp311-cp311-win_amd64.whl
+CREATE TABLE IF NOT EXISTS public.user_faces (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_code VARCHAR(50) UNIQUE,
+    full_name VARCHAR(100),
+    embedding DOUBLE PRECISION[],
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 
+cài thư viện trong file requirements.txt: 
+	Lưu ý: Trong venv, chạy lệnh: pip install requirements.txt
